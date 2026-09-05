@@ -143,6 +143,7 @@ export function RoomPage() {
   const connectedRef = useRef(false)
   const engineRef = useRef<BoardEngine | null>(null)
   const channelRef = useRef<RoomChannel | null>(null)
+  const channelClosing = useRef<Promise<void>>(Promise.resolve())
   const snapshotRef = useRef<RoomSnapshot | null>(null)
   const dragRef = useRef<DragSession | null>(null)
   const measureRef = useRef({ gestureId: '', sequence: 0, lastSent: 0 })
@@ -160,7 +161,7 @@ export function RoomPage() {
       connectedRef.current = false
       setConnected(false)
       engineRef.current?.cancelDrag()
-      void channelRef.current?.disconnect()
+      channelClosing.current = channelRef.current?.disconnect() ?? Promise.resolve()
     }
     const online = () => setConnectionEpoch(epoch => epoch + 1)
     window.addEventListener('offline', offline)
@@ -217,8 +218,8 @@ export function RoomPage() {
       },
     })
     channelRef.current = roomChannel
-    roomChannel.connect().catch((caught) => !cancelled && setToast(toFriendlyError(caught, 'A conexão em tempo real será restabelecida.')))
-    return () => { cancelled = true; void roomChannel.disconnect(); if (channelRef.current === roomChannel) channelRef.current = null }
+    void channelClosing.current.then(() => { if (!cancelled) return roomChannel.connect() }).catch((caught) => !cancelled && setToast(toFriendlyError(caught, 'A conexão em tempo real será restabelecida.')))
+    return () => { cancelled = true; channelClosing.current = roomChannel.disconnect(); if (channelRef.current === roomChannel) channelRef.current = null }
   }, [snapshot.data?.room.realtime_topic, user?.id, Boolean(snapshot.error), connectionEpoch])
 
   const baseEvent = useCallback(() => ({ v: 1 as const, eventId: crypto.randomUUID(), roomId, sceneId: snapshotRef.current!.state.active_scene_id!, userId: user!.id, sentAt: Date.now() }), [roomId, user?.id])

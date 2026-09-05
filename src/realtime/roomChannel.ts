@@ -22,6 +22,7 @@ export class RoomChannel {
   sentCount = 0
   private closed = false
   private ready = false
+  private disconnecting: Promise<void> | null = null
 
   constructor(private readonly options: RoomChannelOptions) {}
 
@@ -50,6 +51,7 @@ export class RoomChannel {
     channel.on('postgres_changes', { event: '*', schema: 'public', table: 'rooms', filter: `id=eq.${this.options.roomId}` }, this.options.onDurableChange)
     await new Promise<void>((resolve, reject) => {
       channel.subscribe(async (status, error) => {
+        if (import.meta.env.DEV) console.debug('Tabletop channel', status)
         if (status === 'SUBSCRIBED') {
           this.ready = false
           this.options.onStatus(false)
@@ -76,9 +78,12 @@ export class RoomChannel {
   }
 
   async disconnect() {
+    if (this.disconnecting) return this.disconnecting
     this.closed = true
     this.ready = false
-    if (this.channel) await supabase.removeChannel(this.channel)
+    const channel = this.channel
     this.channel = null
+    this.disconnecting = (async () => { if (channel) await supabase.removeChannel(channel) })()
+    return this.disconnecting
   }
 }

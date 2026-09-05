@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { Database } from '../data/database.types'
@@ -36,7 +37,7 @@ describe.skipIf(!enabled)('Supabase RLS and atomic multiplayer operations', () =
   afterAll(async () => {
     if (objectPath) await owner.storage.from('room-maps').remove([objectPath])
     if (roomId) await owner.from('rooms').delete().eq('id', roomId)
-    await Promise.all([owner.auth.signOut(), player.auth.signOut(), external.auth.signOut()])
+    await Promise.all([owner.auth.signOut({ scope: 'local' }), player.auth.signOut({ scope: 'local' }), external.auth.signOut({ scope: 'local' })])
   })
 
   it('accepts a hashed invitation atomically and hides the room from outsiders', async () => {

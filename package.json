@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc -b && vite build",
+    "build:pages": "tsc -b && vite build --mode github-pages && node scripts/prepare-github-pages.mjs",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run",
     "test:watch": "vitest",

@@ -57,7 +57,7 @@ test.describe('fatia vertical multiplayer', () => {
     await assetPage.screenshot({ path: widePath, omitBackground: true })
     await assetPage.close()
 
-    await owner.goto('/auth')
+    await owner.goto('./auth')
     await owner.screenshot({ path: mapPath })
     await login(owner, users.owner)
     await expect(owner).toHaveURL(/\/rooms$/)
@@ -209,7 +209,7 @@ test.describe('fatia vertical multiplayer', () => {
 })
 
 test('benchmark mantém 200 tokens renderizados', async ({ page }, testInfo) => {
-  await page.goto('/benchmark')
+  await page.goto('./benchmark')
   await expect(page.getByText('Cenário de carga')).toBeVisible()
   await expect.poll(async () => (await page.evaluate(() => window.__TABLETOP_ENGINE__?.metrics().tokenCount ?? 0))).toBe(200)
   await expect.poll(() => page.evaluate(() => window.__TABLETOP_ENGINE__?.metrics().backgroundStatus), { timeout: 15000 }).toBe('ready')
@@ -234,7 +234,7 @@ test('benchmark mantém 200 tokens renderizados', async ({ page }, testInfo) => 
 })
 
 test('WebGL context loss and unavailable asset do not destroy the board', async ({ page }) => {
-  await page.goto('/benchmark')
+  await page.goto('./benchmark')
   await expect.poll(() => page.evaluate(() => window.__TABLETOP_ENGINE__?.metrics().backgroundStatus), { timeout: 25_000 }).toBe('ready')
   const supported = await page.evaluate(() => {
     const canvas = document.querySelector('canvas')!

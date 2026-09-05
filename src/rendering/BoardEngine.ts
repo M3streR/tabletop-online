@@ -1,7 +1,7 @@
-import { Application, Container, Graphics, Sprite, Text, Texture, TilingSprite } from 'pixi.js'
+import { Application, Container, Graphics, Rectangle, Sprite, Text, Texture, TilingSprite } from 'pixi.js'
 import { TextureStore } from './textureStore'
 import type { Scene, TabletopToken } from '../domain/tabletop'
-import { distanceInCells, initials, screenToWorld, snapPoint, zoomAt, type Camera, type Point } from './math'
+import { distanceInCells, feetAnchoredBounds, fitTokenImage, initials, screenToWorld, snapPoint, zoomAt, type Camera, type Point } from './math'
 
 export type BoardTool = 'select' | 'pan' | 'ping' | 'measure'
 
@@ -49,7 +49,8 @@ export class BoardEngine {
   private releaseBackground: (() => void) | null = null
   backgroundStatus: 'empty' | 'loading' | 'ready' | 'error' = 'empty'
   frameTimes: number[] = []
-  readonly eventsSeen = { ping: 0, measure: 0 }
+  readonly eventsSeen = { ping: 0, measure: 0, tokenDrag: 0, tokenDragAccepted: 0 }
+  lastRemotePoint: Point | null = null
 
   constructor(callbacks: BoardCallbacks) {
     this.callbacks = callbacks
@@ -169,7 +170,7 @@ export class BoardEngine {
     tokens.forEach((token) => {
       const existing = this.tokens.get(token.id)
       if (existing) {
-        const visualChanged = existing.token.revision !== token.revision || existing.token.imageUrl !== token.imageUrl
+        const visualChanged = existing.token.revision !== token.revision || existing.token.image_asset_id !== token.image_asset_id
         const moved = existing.token.transform.revision !== token.transform.revision
         if (moved) existing.previewUntil = 0
         if (visualChanged) {
@@ -178,7 +179,8 @@ export class BoardEngine {
           this.tokenLayer.addChild(existing.container)
         }
         existing.token = token
-        if (token.id !== this.draggingToken && (moved || !existing.target)) {
+        const previewActive = existing.previewUntil > performance.now()
+        if (token.id !== this.draggingToken && (moved || (!existing.target && !previewActive))) {
           existing.target = null
           existing.container.position.set(token.transform.x_world, token.transform.y_world)
         }
@@ -198,8 +200,10 @@ export class BoardEngine {
 
   setRemoteTokenPosition(tokenId: string, point: Point) {
     const view = this.tokens.get(tokenId)
-    if (view) { view.target = point; view.previewUntil = performance.now() + 1600 }
+    if (view) { this.eventsSeen.tokenDragAccepted++; this.lastRemotePoint = { ...point }; view.target = point; view.previewUntil = performance.now() + 4000 }
   }
+
+  recordRemoteDrag() { this.eventsSeen.tokenDrag++ }
 
   showPing(point: Point, color = '#64dfd2') {
     if (!this.mounted || this.destroyed) return
@@ -243,7 +247,7 @@ export class BoardEngine {
 
   metrics() {
     const average = this.frameTimes.length ? this.frameTimes.reduce((a, b) => a + b, 0) / this.frameTimes.length : 0
-    return { fps: average ? 1000 / average : 0, frameMs: average, tokenCount: this.tokens.size, eventsSeen: { ...this.eventsSeen }, dragging: this.draggingToken, textureMiB: this.textures.bytes / 1024 / 1024, backgroundStatus: this.backgroundStatus, camera: { ...this.camera } }
+    return { fps: average ? 1000 / average : 0, frameMs: average, tokenCount: this.tokens.size, eventsSeen: { ...this.eventsSeen }, lastRemotePoint: this.lastRemotePoint, dragging: this.draggingToken, textureMiB: this.textures.bytes / 1024 / 1024, backgroundStatus: this.backgroundStatus, camera: { ...this.camera } }
   }
 
   tokenPosition(tokenId: string) {
@@ -256,7 +260,21 @@ export class BoardEngine {
   }
 
   tokenScreenPositions() {
-    return Array.from(this.tokens.entries()).map(([id, view]) => ({ id, x: this.camera.x + view.container.x * this.camera.zoom, y: this.camera.y + view.container.y * this.camera.zoom }))
+    return Array.from(this.tokens.entries()).map(([id, view]) => {
+      const bounds = this.tokenBounds(view)
+      return {
+        id,
+        x: this.camera.x + (view.container.x + bounds.x + bounds.width / 2) * this.camera.zoom,
+        y: this.camera.y + (view.container.y + bounds.y + bounds.height / 2) * this.camera.zoom,
+      }
+    })
+  }
+
+  tokenVisuals() {
+    return Array.from(this.tokens.entries()).map(([id, view]) => {
+      const bounds = this.tokenBounds(view)
+      return { id, baseX: view.container.x, baseY: view.container.y, width: bounds.width, height: bounds.height, top: view.container.y + bounds.y, renderMode: view.container.label }
+    })
   }
 
   effectCount() {
@@ -288,30 +306,44 @@ export class BoardEngine {
 
   private makeToken(token: TabletopToken) {
     const holder = new Container()
+    holder.label = token.imageUrl ? 'image-pending' : 'fallback'
     holder.position.set(token.transform.x_world, token.transform.y_world)
     holder.zIndex = token.z_index
-    const body = new Graphics().circle(0, 0, token.width_world / 2).fill(token.color).stroke({ color: 0xf4f7f8, width: Math.max(2, token.width_world * 0.045) })
+    const size = Math.max(8, token.width_world)
+    const fallbackBounds = feetAnchoredBounds(size, size)
+    holder.hitArea = new Rectangle(fallbackBounds.x, fallbackBounds.y, fallbackBounds.width, fallbackBounds.height)
+    const body = new Graphics().circle(0, -size / 2, size / 2).fill(token.color).stroke({ color: 0xf4f7f8, width: Math.max(2, size * 0.045) })
+    body.visible = !token.imageUrl
     holder.addChild(body)
-    const label = new Text({ text: initials(token.name), style: { fill: '#07110f', fontFamily: 'system-ui', fontWeight: '800', fontSize: Math.max(12, token.width_world * 0.28) } })
+    const label = new Text({ text: initials(token.name), style: { fill: '#07110f', fontFamily: 'system-ui', fontWeight: '800', fontSize: Math.max(12, size * 0.28) } })
     label.anchor.set(0.5)
+    label.position.set(0, -size / 2)
+    label.visible = !token.imageUrl
     holder.addChild(label)
     if (token.imageUrl) {
       const resource = this.textures.acquire(token.imageUrl, 'token')
       holder.once('destroyed', resource.release)
       resource.texture.then((texture) => {
         if (holder.destroyed) return
-        label.visible = false
+        const fitted = fitTokenImage(texture.width, texture.height, size)
         const image = new Sprite(texture)
-        image.anchor.set(0.5)
-        image.width = token.width_world - 6
-        image.height = token.height_world - 6
+        image.anchor.set(0.5, 1)
+        image.width = fitted.width
+        image.height = fitted.height
         image.roundPixels = true
-        holder.addChildAt(image, 1)
-      }).catch(() => undefined)
+        holder.hitArea = new Rectangle(-fitted.width / 2, -fitted.height, fitted.width, fitted.height)
+        holder.label = 'image'
+        holder.addChildAt(image, 0)
+      }).catch(() => {
+        if (holder.destroyed) return
+        holder.label = 'fallback'
+        body.visible = true
+        label.visible = true
+      })
     }
     const name = new Text({ text: token.name, style: { fill: '#ffffff', fontFamily: 'system-ui', fontSize: 12, fontWeight: '600', stroke: { color: '#05070a', width: 4 } } })
     name.anchor.set(0.5, 0)
-    name.position.set(0, token.height_world / 2 + 7)
+    name.position.set(0, 7)
     holder.addChild(name)
     return holder
   }
@@ -332,7 +364,10 @@ export class BoardEngine {
     this.selection.clear()
     const view = this.selectedId ? this.tokens.get(this.selectedId) : null
     if (!view) return
-    this.selection.circle(view.container.x, view.container.y, view.token.width_world / 2 + 6 / this.camera.zoom).stroke({ color: 0x64dfd2, width: 3 / this.camera.zoom })
+    const bounds = this.tokenBounds(view)
+    const markerWidth = Math.max(18 / this.camera.zoom, bounds.width * 0.9)
+    const markerHeight = Math.max(7 / this.camera.zoom, Math.min(18 / this.camera.zoom, bounds.height * 0.12))
+    this.selection.ellipse(view.container.x, view.container.y - markerHeight * 0.18, markerWidth / 2, markerHeight / 2).stroke({ color: 0x64dfd2, width: 3 / this.camera.zoom })
   }
 
   private applyCamera() {
@@ -348,15 +383,20 @@ export class BoardEngine {
   }
 
   private hitToken(world: Point) {
-    return Array.from(this.tokens.values()).reverse().find((view) => Math.hypot(world.x - view.container.x, world.y - view.container.y) <= view.token.width_world / 2)
+    return Array.from(this.tokens.values()).reverse().find((view) => this.tokenBounds(view).contains(world.x - view.container.x, world.y - view.container.y))
   }
 
-  private clampAndSnap(point: Point, view?: TokenView, snap = true): Point {
+  private tokenBounds(view: TokenView) {
+    return view.container.hitArea instanceof Rectangle
+      ? view.container.hitArea
+      : new Rectangle(-view.token.width_world / 2, -view.token.height_world, view.token.width_world, view.token.height_world)
+  }
+
+  private clampAndSnap(point: Point, snap = true): Point {
     const scene = this.scene
     if (!scene) return point
     const snapped = snap && scene.snap_enabled ? snapPoint(point, scene.grid_cell_size, scene.grid_offset_x, scene.grid_offset_y) : point
-    const radius = (view?.token.width_world ?? 0) / 2
-    return { x: Math.min(scene.world_width - radius, Math.max(radius, snapped.x)), y: Math.min(scene.world_height - radius, Math.max(radius, snapped.y)) }
+    return { x: Math.min(scene.world_width, Math.max(0, snapped.x)), y: Math.min(scene.world_height, Math.max(0, snapped.y)) }
   }
 
   private onPointerDown = async (event: PointerEvent) => {
@@ -393,7 +433,7 @@ export class BoardEngine {
     if (this.draggingToken) {
       const view = this.tokens.get(this.draggingToken)
       if (!view) return
-      const point = this.clampAndSnap(world, view, false)
+      const point = this.clampAndSnap(world, false)
       view.container.position.set(point.x, point.y)
       this.redrawSelection()
       this.callbacks.onDragMove(this.draggingToken, point)
@@ -412,7 +452,7 @@ export class BoardEngine {
     if (this.draggingToken) {
       const id = this.draggingToken
       const view = this.tokens.get(id)
-      const point = this.clampAndSnap(world, view)
+      const point = this.clampAndSnap(world)
       view?.container.position.set(point.x, point.y)
       this.draggingToken = null
       this.callbacks.onDragEnd(id, point)

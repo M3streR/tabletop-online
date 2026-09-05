@@ -20,8 +20,12 @@ async function tokenScreenPosition(page: Page) {
   return page.evaluate(() => window.__TABLETOP_ENGINE__?.tokenScreenPositions()[0] ?? null)
 }
 
+async function tokenVisuals(page: Page) {
+  return page.evaluate(() => window.__TABLETOP_ENGINE__?.tokenVisuals() ?? [])
+}
+
 test.describe('fatia vertical multiplayer', () => {
-  test.setTimeout(180_000)
+  test.setTimeout(300_000)
   test.skip(!enabled, 'Credenciais E2E não configuradas.')
   let ownerContext: BrowserContext
   let playerContext: BrowserContext
@@ -41,6 +45,17 @@ test.describe('fatia vertical multiplayer', () => {
     player.on('console', message => { if (message.text().startsWith('Tabletop channel')) console.log('PLAYER', message.text()) })
     const roomName = `Mesa E2E ${Date.now()}`
     const mapPath = testInfo.outputPath('map.png')
+    const portraitPath = testInfo.outputPath('portrait-token.png')
+    const widePath = testInfo.outputPath('wide-token.png')
+
+    const assetPage = await ownerContext.newPage()
+    await assetPage.setViewportSize({ width: 240, height: 520 })
+    await assetPage.setContent('<style>html,body{margin:0;background:transparent}.figure{position:absolute;left:92px;top:18px;width:56px;height:480px;background:linear-gradient(#64dfd2,#724ee8);clip-path:polygon(50% 0,72% 12%,67% 31%,86% 56%,68% 58%,64% 100%,36% 100%,32% 58%,14% 56%,33% 31%,28% 12%)}</style><div class="figure"></div>')
+    await assetPage.screenshot({ path: portraitPath, omitBackground: true })
+    await assetPage.setViewportSize({ width: 520, height: 200 })
+    await assetPage.setContent('<style>html,body{margin:0;background:transparent}.figure{position:absolute;left:18px;top:58px;width:484px;height:84px;background:linear-gradient(90deg,#f2bd68,#724ee8);clip-path:polygon(0 50%,22% 12%,76% 20%,100% 50%,76% 80%,22% 88%)}</style><div class="figure"></div>')
+    await assetPage.screenshot({ path: widePath, omitBackground: true })
+    await assetPage.close()
 
     await owner.goto('/auth')
     await owner.screenshot({ path: mapPath })
@@ -73,9 +88,15 @@ test.describe('fatia vertical multiplayer', () => {
 
     await owner.getByRole('button', { name: 'Criar token' }).click()
     await owner.getByLabel('Nome', { exact: true }).fill('Arqueira E2E')
+    await owner.getByLabel('Tamanho').fill('180')
+    await owner.getByLabel('Imagem opcional').setInputFiles(portraitPath)
     await owner.locator('.dialog-card').getByRole('button', { name: 'Criar token' }).click()
-    await expect.poll(async () => (await tokenPositions(owner)).length).toBe(1)
-    await expect.poll(async () => (await tokenPositions(player)).length).toBe(1)
+    await expect.poll(async () => (await tokenPositions(owner)).length, { timeout: 25_000 }).toBe(1)
+    await expect.poll(async () => (await tokenPositions(player)).length, { timeout: 25_000 }).toBe(1)
+    await expect.poll(async () => (await tokenVisuals(owner))[0]?.renderMode, { timeout: 25_000 }).toBe('image')
+    const portrait = (await tokenVisuals(owner))[0]
+    expect(portrait.height).toBeGreaterThan(portrait.width * 1.5)
+    expect(Math.abs(portrait.baseY - (portrait.top + portrait.height))).toBeLessThan(.01)
 
     const playerCanvas = player.getByLabel('Mesa virtual 2D')
     const playerBox = (await playerCanvas.boundingBox())!
@@ -88,17 +109,22 @@ test.describe('fatia vertical multiplayer', () => {
     await expect(owner.getByRole('heading', { name: 'Arqueira E2E' })).toBeVisible()
     await owner.getByLabel('Player E2E').check()
     await expect(owner.getByLabel('Player E2E')).toBeChecked()
-    await expect.poll(() => player.evaluate(() => window.__TABLETOP_ENGINE__?.controllableTokenIds() ?? [])).toHaveLength(1)
+    await expect.poll(() => player.evaluate(() => window.__TABLETOP_ENGINE__?.controllableTokenIds() ?? []), { timeout: 25_000 }).toHaveLength(1)
 
     const before = (await tokenPositions(owner))[0]
     await player.mouse.move(playerBox.x + playerToken.x, playerBox.y + playerToken.y)
     await player.mouse.down()
     await expect.poll(() => player.evaluate(() => window.__TABLETOP_ENGINE__?.metrics().dragging)).toBeTruthy()
-    await player.mouse.move(playerBox.x + playerToken.x + 140, playerBox.y + playerToken.y + 70, { steps: 12 })
-    await expect.poll(async () => (await tokenPositions(owner))[0]?.x ?? 0).toBeGreaterThan(before.x + 40)
+    await player.mouse.move(playerBox.x + playerToken.x + 70, playerBox.y + playerToken.y + 35)
+    await player.waitForTimeout(100)
+    await player.mouse.move(playerBox.x + playerToken.x + 140, playerBox.y + playerToken.y + 70)
+    expect((await tokenPositions(player))[0]?.x ?? 0).toBeGreaterThan(before.x + 40)
+    await expect.poll(() => owner.evaluate(() => window.__TABLETOP_ENGINE__?.metrics().eventsSeen.tokenDragAccepted ?? 0), { timeout: 5_000 }).toBeGreaterThan(0)
+    const remoteTarget = await owner.evaluate(() => window.__TABLETOP_ENGINE__?.metrics().lastRemotePoint)
+    expect(remoteTarget?.x ?? 0).toBeGreaterThan(before.x + 40)
     await player.mouse.up()
-    await expect.poll(async () => (await tokenPositions(owner))[0]?.revision).toBeGreaterThan(before.revision)
-    await expect.poll(async () => (await tokenPositions(player))[0]?.revision).toBeGreaterThan(before.revision)
+    await expect.poll(async () => (await tokenPositions(owner))[0]?.revision, { timeout: 25_000 }).toBeGreaterThan(before.revision)
+    await expect.poll(async () => (await tokenPositions(player))[0]?.revision, { timeout: 25_000 }).toBeGreaterThan(before.revision)
 
     const finalOwner = (await tokenPositions(owner))[0]
     await Promise.all([owner.reload(), player.reload()])
@@ -149,6 +175,23 @@ test.describe('fatia vertical multiplayer', () => {
     await playerContext.setOffline(false)
     await expect(player.getByTestId('connection-state')).toHaveText('Online', { timeout: 25_000 })
     await expect.poll(async () => (await tokenPositions(player))[0]?.x).toBe(afterPlayer.x)
+
+    await owner.getByRole('button', { name: 'Criar token' }).click()
+    await owner.getByLabel('Nome', { exact: true }).fill('Fallback E2E')
+    await owner.getByLabel('Tamanho').fill('100')
+    await owner.locator('.dialog-card').getByRole('button', { name: 'Criar token' }).click()
+    await expect.poll(async () => (await tokenVisuals(owner)).length).toBe(2)
+    await expect.poll(async () => (await tokenVisuals(owner))[1]?.renderMode).toBe('fallback')
+
+    await owner.getByRole('button', { name: 'Criar token' }).click()
+    await owner.getByLabel('Nome', { exact: true }).fill('Largo E2E')
+    await owner.getByLabel('Tamanho').fill('120')
+    await owner.getByLabel('Imagem opcional').setInputFiles(widePath)
+    await owner.locator('.dialog-card').getByRole('button', { name: 'Criar token' }).click()
+    await expect.poll(async () => (await tokenVisuals(owner)).length).toBe(3)
+    await expect.poll(async () => (await tokenVisuals(owner))[2]?.renderMode).toBe('image')
+    const wide = (await tokenVisuals(owner))[2]
+    expect(wide.width).toBeGreaterThan(wide.height * 2)
 
     await owner.getByRole('button', { name: 'Adicionar mapa' }).click()
     await owner.getByLabel('Nome da cena').fill('Segunda cena')

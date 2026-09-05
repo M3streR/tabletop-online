@@ -2,6 +2,7 @@ import { Dice5, LoaderCircle, Sparkles } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { Navigate, useSearchParams } from 'react-router-dom'
 import { toFriendlyError } from '../../core/errors'
+import { publicAppUrl } from '../../core/appUrl'
 import { supabase } from '../../data/supabase'
 import { useAuth } from './AuthProvider'
 
@@ -34,7 +35,7 @@ export function AuthPage() {
           password,
           options: {
             data: { display_name: displayName.trim() },
-            emailRedirectTo: `${window.location.origin}${returnTo}`,
+            emailRedirectTo: publicAppUrl(returnTo),
           },
         })
         if (signUpError) throw signUpError

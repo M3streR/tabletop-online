@@ -3,6 +3,7 @@ import { Copy, DoorOpen, Grid3X3, Hand, ImagePlus, Link2, LoaderCircle, Lock, Lo
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type MutableRefObject } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { toFriendlyError } from '../../core/errors'
+import { publicAppUrl } from '../../core/appUrl'
 import { acquireTokenLease, activeScene, assetForScene, commitTokenMove, createInvite, createScene, createToken, deleteRoom, deleteToken, getRoomSnapshot, leaveRoom, releaseTokenLease, renameRoom, renewTokenLease, revokeRoomInvites, sceneTokens, setActiveScene, setTokenGrant, updateScene, updateToken } from '../../data/tabletop'
 import type { RoomSnapshot, TabletopToken } from '../../domain/tabletop'
 import { canControlToken, isRoomAdmin } from '../../domain/tabletop'
@@ -45,14 +46,14 @@ function SceneForm({ roomId, onCreated, onCancel }: { roomId: string; onCreated:
   </form>
 }
 
-function TokenForm({ snapshot, sceneId, onCreated, onCancel }: { snapshot: RoomSnapshot; sceneId: string; onCreated: () => void; onCancel: () => void }) {
+function TokenForm({ snapshot, sceneId, onCreated, onCancel }: { snapshot: RoomSnapshot; sceneId: string; onCreated: () => void | Promise<unknown>; onCancel: () => void }) {
   const scene = snapshot.scenes.find((item) => item.id === sceneId)!
   const [name, setName] = useState('')
   const [size, setSize] = useState(scene.grid_cell_size)
   const [color, setColor] = useState('#64dfd2')
   const [file, setFile] = useState<File | null>(null)
   const [error, setError] = useState('')
-  const mutation = useMutation({ mutationFn: () => createToken({ roomId: snapshot.room.id, sceneId, name, size, color, image: file, x: Math.min(scene.world_width / 2, scene.world_width - size / 2), y: Math.min(scene.world_height / 2, scene.world_height - size / 2) }), onSuccess: onCreated, onError: (caught) => setError(toFriendlyError(caught, 'Não foi possível criar o token.')) })
+  const mutation = useMutation({ mutationFn: () => createToken({ roomId: snapshot.room.id, sceneId, name, size, color, image: file, x: Math.min(scene.world_width / 2, scene.world_width - size / 2), y: Math.min(scene.world_height / 2, scene.world_height - size / 2) }), onSuccess: async () => { await onCreated() }, onError: (caught) => setError(toFriendlyError(caught, 'Não foi possível criar o token.')) })
   return <form className="form-stack" onSubmit={(event) => { event.preventDefault(); if (name.trim()) mutation.mutate() }}>
     <label><span>Nome</span><input value={name} onChange={(event) => setName(event.target.value)} maxLength={80} placeholder="Arqueira" autoFocus /></label>
     <div className="form-row"><label><span>Tamanho</span><input type="number" min={8} max={2048} value={size} onChange={(event) => setSize(Number(event.target.value))} /></label><label><span>Cor</span><input type="color" value={color} onChange={(event) => setColor(event.target.value)} /></label></div>
@@ -81,7 +82,7 @@ function InvitePanel({ roomId, canInviteGm }: { roomId: string; canInviteGm: boo
   const [copied, setCopied] = useState(false)
   const [role, setRole] = useState<'player' | 'gm'>('player')
   const [error, setError] = useState('')
-  const mutation = useMutation({ mutationFn: () => createInvite(roomId, role), onSuccess: ({ secret }) => { setLink(`${location.origin}/invite/${secret}`); setError('') }, onError: (caught) => setError(toFriendlyError(caught)) })
+  const mutation = useMutation({ mutationFn: () => createInvite(roomId, role), onSuccess: ({ secret }) => { setLink(publicAppUrl(`/invite/${secret}`)); setError('') }, onError: (caught) => setError(toFriendlyError(caught)) })
   const copy = async () => { await navigator.clipboard.writeText(link); setCopied(true); setTimeout(() => setCopied(false), 1600) }
   const revoke = async () => { try { await revokeRoomInvites(roomId); setLink(''); setToastMessage('Convites ativos revogados.') } catch (caught) { setError(toFriendlyError(caught)) } }
   const [toastMessage, setToastMessage] = useState('')
@@ -118,7 +119,7 @@ function TokenPanel({ token, snapshot, userId, onClose, onChanged }: { token: Ta
     <header><div><p className="eyebrow">Token</p><h2>{token.name}</h2></div><button className="icon-button" onClick={onClose} aria-label="Fechar"><X size={18} /></button></header>
     {!admin && <div className="permission-note">{canControlToken(token, snapshot.role, userId) ? 'Você controla este token.' : 'Somente visualização.'}</div>}
     {admin && <><label><span>Nome</span><div className="inline-field"><input value={name} maxLength={80} onChange={(event) => setName(event.target.value)} /><button className="button secondary" onClick={() => save.mutate()} disabled={save.isPending}>Salvar</button></div></label>
-      <div className="form-row"><label><span>Tamanho do token</span><input type="number" min={8} max={2048} value={size} onChange={(event) => setSize(Number(event.target.value))} /></label><label><span>Cor do token</span><input type="color" value={color} onChange={(event) => setColor(event.target.value)} /></label></div>
+      <div className="form-row"><label><span>Escala visual</span><input type="number" min={8} max={2048} value={size} onChange={(event) => setSize(Number(event.target.value))} /><small>A imagem preserva a proporção original.</small></label><label><span>Cor do fallback</span><input type="color" value={color} onChange={(event) => setColor(event.target.value)} /></label></div>
       <div className="token-options"><button onClick={() => void change({ locked: !token.locked })}>{token.locked ? <Lock size={16} /> : <Unlock size={16} />}{token.locked ? 'Desbloquear' : 'Bloquear'}</button><button onClick={() => void change({ visibility: token.visibility === 'everyone' ? 'gm_only' : 'everyone' })}><Users size={16} />{token.visibility === 'everyone' ? 'Visível a todos' : 'Apenas mestres'}</button></div>
       <div className="grant-list"><p>Quem pode mover</p>{snapshot.participants.filter((participant) => participant.role !== 'owner').map((participant) => <label key={participant.userId}><span><i className={`presence-dot ${participant.role}`} />{participant.displayName}</span><input type="checkbox" checked={grants.has(participant.userId)} onChange={(event) => void grant(participant.userId, event.target.checked)} /></label>)}</div>
       <button className="button danger wide" onClick={() => remove.mutate()} disabled={remove.isPending}><Trash2 size={17} />Excluir token</button>
@@ -150,7 +151,7 @@ export function RoomPage() {
   const reconnectTimer = useRef<number | null>(null)
   const snapshot = useQuery({ queryKey: ['room', roomId, user?.id], queryFn: () => getRoomSnapshot(roomId, user!.id), enabled: Boolean(roomId && user), retry: 1, refetchInterval: 15_000, refetchOnReconnect: 'always' })
   snapshotRef.current = snapshot.data ?? null
-  const refresh = useCallback(() => void queryClient.invalidateQueries({ queryKey: ['room', roomId] }), [queryClient, roomId])
+  const refresh = useCallback(() => queryClient.invalidateQueries({ queryKey: ['room', roomId] }), [queryClient, roomId])
   const currentScene = snapshot.data ? activeScene(snapshot.data) : null
   const currentTokens = snapshot.data && currentScene ? sceneTokens(snapshot.data, currentScene.id) : []
   const selected = currentTokens.find((token) => token.id === selectedId) ?? null
@@ -199,6 +200,7 @@ export function RoomPage() {
       onEvent: async (event) => {
         if (event.sceneId !== snapshotRef.current?.state.active_scene_id) return
         if (event.type === 'token.drag') {
+          engineRef.current?.recordRemoteDrag()
           const token = snapshotRef.current?.tokens.find((t) => t.id === event.tokenId)
           if (!token || token.visibility !== 'everyone' || token.locked || event.x < 0 || event.x > 4096 || event.y < 0 || event.y > 4096) return
           if (event.phase === 'end' || event.phase === 'cancel') { refresh(); return }
@@ -321,7 +323,7 @@ export function RoomPage() {
       {toast && <div className="tabletop-toast" role="status">{toast}</div>}
     </section>
     {modal === 'scene' && <Dialog title="Nova cena" onClose={() => setModal(null)}><SceneForm roomId={roomId} onCreated={(id) => void createdScene(id)} onCancel={() => setModal(null)} /></Dialog>}
-    {modal === 'token' && currentScene && <Dialog title="Novo token" onClose={() => setModal(null)}><TokenForm snapshot={data} sceneId={currentScene.id} onCreated={() => { setModal(null); refresh() }} onCancel={() => setModal(null)} /></Dialog>}
+    {modal === 'token' && currentScene && <Dialog title="Novo token" onClose={() => setModal(null)}><TokenForm snapshot={data} sceneId={currentScene.id} onCreated={() => { setModal(null); return refresh() }} onCancel={() => setModal(null)} /></Dialog>}
     {modal === 'invite' && <Dialog title="Convidar para a sala" onClose={() => setModal(null)}><InvitePanel roomId={roomId} canInviteGm={data.role === 'owner'} /></Dialog>}
     {modal === 'grid' && currentScene && <Dialog title="Grid quadrado" onClose={() => setModal(null)}><GridForm scene={currentScene} onSaved={() => { setModal(null); refresh() }} onCancel={() => setModal(null)} /></Dialog>}
     {modal === 'room' && <Dialog title="Sala" onClose={() => setModal(null)}><RoomMenu snapshot={data} onClose={() => setModal(null)} onRefresh={refresh} onExit={() => void exitRoom()} onSignOut={() => void signOut()} /></Dialog>}
